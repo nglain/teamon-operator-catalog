@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "teamon-operator",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "TeamON Operator: вход и рабочее пространство. Закрытый runtime загружается после авторизации.",
   "author": {
     "name": "TeamON"
