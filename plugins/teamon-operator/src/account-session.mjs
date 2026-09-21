@@ -2,6 +2,7 @@ import { open, mkdir, rename, unlink, lstat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import {setTimeout as delay} from 'node:timers/promises';
 
 export const MASTER_ORIGIN = 'https://master.nglain.com';
 export const accountPath = configPath => `${configPath}.account.json`;
@@ -37,7 +38,19 @@ export async function saveAccountSession(file, session) {
 }
 
 export async function accountJson(url, options={}, fetchImpl=fetch) {
-  const response=await fetchImpl(url,{...options,redirect:'error',signal:AbortSignal.timeout(15_000)});
+  const signal=AbortSignal.any([AbortSignal.timeout(15_000),...(options.signal?[options.signal]:[])]);
+  const readOnly=(options.method||'GET').toUpperCase()==='GET';
+  let response;
+  for(let attempt=0;;attempt++){
+    try{response=await fetchImpl(url,{...options,redirect:'error',signal});}
+    catch(error){
+      if(!readOnly||attempt||signal.aborted||!(error instanceof TypeError))throw error;
+      await delay(250,undefined,{signal});continue;
+    }
+    if(!readOnly||attempt||![502,503,504].includes(response.status))break;
+    await response.body?.cancel();
+    await delay(250,undefined,{signal});
+  }
   if(!response.ok) throw new Error(response.status===401?'account_login_required':'account_service_unavailable');
   let bytes=0; const chunks=[];
   for await(const chunk of response.body || []) {bytes+=chunk.length;if(bytes>256*1024)throw new Error('account_response_too_large');chunks.push(chunk);}

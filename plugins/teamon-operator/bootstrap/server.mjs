@@ -121,7 +121,7 @@ export async function createPrivateBootstrap({release,catalog,configPath,fetchIm
       return fail('operator_runtime_required: complete explicit operator_setup first');
     }catch(error){
       const allowed=['account_login_required','account_changed','account_service_unavailable','operator_release_unavailable','operator_release_busy','operator_download_timeout','operator_download_network_error','operator_release_too_large','invalid_release_range','operator_closed','operator_runtime_required','runtime_catalog_mismatch','invalid_operator_release','release_pin_mismatch','runtime_integrity_failed','unsafe_runtime_file','unsafe_runtime_directory','unexpected_runtime_file','invalid_setup_request','invalid_status_request','invalid_login_request'];
-      return fail(allowed.includes(error.message)?error.message:'operator_request_failed');
+      return fail(allowed.includes(error.message)?error.message:runtimeFailureCode(error));
     }
   });
   const close=server.close.bind(server);
@@ -134,4 +134,10 @@ export async function servePrivateBootstrap() {
   const catalog=JSON.parse(await readFile(new URL('./catalog.json',import.meta.url),'utf8'));
   const configPath=path.resolve(process.env.TEAMON_OPERATOR_CONFIG||path.join(os.homedir(),'.config/teamon-operator/operator.json'));
   const server=await createPrivateBootstrap({release,catalog,configPath});await server.connect(new StdioServerTransport());
+}
+
+// Do not expose validation payloads or retry a possibly completed operation.
+export function runtimeFailureCode(error) {
+  return error?.code===-32602 && typeof error.message==='string' && error.message.includes("Structured content does not match the tool's output schema:")
+    ? 'operator_runtime_response_invalid' : 'operator_request_failed';
 }
