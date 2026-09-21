@@ -108,7 +108,7 @@ export async function createPrivateBootstrap({release,catalog,configPath,fetchIm
       }
       return fail('operator_runtime_required: complete explicit operator_setup first');
     }catch(error){
-      const allowed=['account_login_required','account_changed','account_service_unavailable','operator_release_unavailable','operator_closed','operator_runtime_required','runtime_catalog_mismatch','invalid_operator_release','release_pin_mismatch','runtime_integrity_failed','unsafe_runtime_file','unsafe_runtime_directory','unexpected_runtime_file','invalid_setup_request','invalid_status_request','invalid_login_request'];
+      const allowed=['account_login_required','account_changed','account_service_unavailable','operator_release_unavailable','operator_release_busy','operator_download_timeout','operator_download_network_error','operator_release_too_large','invalid_release_range','operator_closed','operator_runtime_required','runtime_catalog_mismatch','invalid_operator_release','release_pin_mismatch','runtime_integrity_failed','unsafe_runtime_file','unsafe_runtime_directory','unexpected_runtime_file','invalid_setup_request','invalid_status_request','invalid_login_request'];
       return fail(allowed.includes(error.message)?error.message:'operator_request_failed');
     }
   });

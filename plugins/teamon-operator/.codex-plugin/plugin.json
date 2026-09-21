@@ -1,6 +1,6 @@
 {
   "name": "teamon-operator",
-  "version": "0.2.19",
+  "version": "0.2.20",
   "description": "TeamON Operator: вход и рабочее пространство. Закрытый runtime загружается после авторизации.",
   "author": {
     "name": "TeamON"

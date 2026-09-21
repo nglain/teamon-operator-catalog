@@ -6,7 +6,8 @@
       "args": [
         "${PLUGIN_ROOT}/scripts/launch.mjs",
         "serve"
-      ]
+      ],
+      "tool_timeout_sec": 360
     }
   },
   "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"

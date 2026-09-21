@@ -3,7 +3,11 @@
     "teamon-operator-runtime": {
       "type": "stdio",
       "command": "node",
-      "args": ["${PLUGIN_ROOT}/scripts/launch.mjs", "serve"]
+      "args": [
+        "${PLUGIN_ROOT}/scripts/launch.mjs",
+        "serve"
+      ],
+      "tool_timeout_sec": 360
     }
   }
 }
