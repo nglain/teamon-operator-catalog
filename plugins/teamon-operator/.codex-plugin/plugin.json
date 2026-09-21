@@ -1,0 +1,22 @@
+{
+  "name": "teamon-operator",
+  "version": "0.2.18",
+  "description": "TeamON Operator: вход и рабочее пространство. Закрытый runtime загружается после авторизации.",
+  "author": {
+    "name": "TeamON"
+  },
+  "interface": {
+    "displayName": "TeamON Operator",
+    "shortDescription": "Компании, агенты и контекст в вашем Codex.",
+    "longDescription": "Установка одного плагина, вход в TeamON и рабочий пульт. Права на компании назначает администратор. Публичный пакет содержит только загрузчик; нужен Node 24.14.1+ (ветка 24).",
+    "developerName": "TeamON",
+    "category": "Productivity",
+    "capabilities": [
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Помоги завершить установку TeamON Operator, войти и открыть пульт."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

@@ -1,0 +1,20 @@
+{
+  "name": "teamon-operator",
+  "interface": {
+    "displayName": "Teamon Operator"
+  },
+  "plugins": [
+    {
+      "name": "teamon-operator",
+      "source": {
+        "source": "local",
+        "path": "./plugins/teamon-operator"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
