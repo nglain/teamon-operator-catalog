@@ -81,7 +81,19 @@ export async function createPrivateBootstrap({release,catalog,configPath,fetchIm
     try {
       if(name==='operator_setup'){
         validateSetup(args);
-        installing ||= setup(args).finally(()=>{installing=undefined;});return await installing;
+        // Keep one job alive between bounded tool calls. Preserve its outcome
+        // until a caller observes it, including failures between polls.
+        installing ||= setup(args).then(value=>({value}),error=>({error}));
+        let timer;
+        try {
+          const outcome=await Promise.race([installing,new Promise(resolve=>{
+            timer=setTimeout(()=>resolve(null),(args.wait_seconds ?? 45)*1000);
+          })]);
+          if(!outcome)return result({state:'operator_installing',version:release.version,retryAfter:2,next:'operator_setup'});
+          installing=undefined;
+          if(outcome.error)throw outcome.error;
+          return outcome.value;
+        } finally {clearTimeout(timer);}
       }
       if(!catalog.some(t=>t.name===name))return fail('unknown_operator_tool');
       const active=await load();
