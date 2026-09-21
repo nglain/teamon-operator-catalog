@@ -4,7 +4,8 @@ import {gunzipSync} from 'node:zlib';
 import {setTimeout as delay} from 'node:timers/promises';
 
 // Each bounded request is authenticated on the same official origin. Small,
-// closed connections tolerate paths that stall large TLS transfers. Compressed
+// responses tolerate paths that stall large transfers; reuse TLS connections
+// instead of paying for a new handshake for every range. Compressed
 // bytes are untrusted until decompression and signed archive verification.
 export async function downloadRelease({pin,publicKey,accessToken,fetchImpl=fetch}) {
   if(!/^[A-Za-z0-9_-]{43}$/.test(accessToken) || !/^\d+\.\d+\.\d+$/.test(pin.expectedVersion)
@@ -15,7 +16,7 @@ export async function downloadRelease({pin,publicKey,accessToken,fetchImpl=fetch
     for(let attempt=0;attempt<3;attempt++) {
       if(Date.now()>=deadline)throw Error('operator_download_timeout');
       try {
-        const response=await fetchImpl(base+file,{redirect:'error',headers:{Authorization:`Bearer ${accessToken}`,Connection:'close','Accept-Encoding':'identity',...(range?{Range:range}:{})},signal:AbortSignal.timeout(Math.max(1,Math.min(10000,deadline-Date.now())))});
+        const response=await fetchImpl(base+file,{redirect:'error',headers:{Authorization:`Bearer ${accessToken}`,Connection:'keep-alive','Accept-Encoding':'identity',...(range?{Range:range}:{})},signal:AbortSignal.timeout(Math.max(1,Math.min(10000,deadline-Date.now())))});
         if(response.status===401 || response.status===403){await response.body?.cancel();throw Error('account_login_required');}
         if(response.status===429 || response.status===503){await response.body?.cancel();throw Error('operator_release_busy');}
         if(response.status!==(range?206:200)){await response.body?.cancel();throw Error('operator_release_unavailable');}
