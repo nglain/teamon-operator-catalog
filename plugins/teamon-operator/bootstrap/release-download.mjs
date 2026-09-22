@@ -13,12 +13,13 @@ export async function downloadRelease({pin,publicKey,accessToken,fetchImpl=fetch
     || !['darwin','linux','win32'].includes(pin.platform) || !['arm64','x64'].includes(pin.arch))throw Error('invalid_delivery_request');
   const base=`${MASTER_ORIGIN}/api/operator/distribution/${pin.expectedVersion}/${pin.platform}-${pin.arch}/`;
   const deadline=Date.now()+300000;
+  let reconnecting=false;
   async function get(file,limit,range) {
     for(let attempt=0;attempt<3;attempt++) {
       if(Date.now()>=deadline)throw Error('operator_download_timeout');
       let retryAfterMs=0;
       try {
-        const response=await fetchImpl(base+file,{redirect:'error',headers:{Authorization:`Bearer ${accessToken}`,Connection:'keep-alive','Accept-Encoding':'identity',...(range?{Range:range}:{})},signal:AbortSignal.timeout(Math.max(1,Math.min(10000,deadline-Date.now())))});
+        const response=await fetchImpl(base+file,{redirect:'error',headers:{Authorization:`Bearer ${accessToken}`,Connection:reconnecting?'close':'keep-alive','Accept-Encoding':'identity',...(range?{Range:range}:{})},signal:AbortSignal.timeout(Math.max(1,Math.min(10000,deadline-Date.now())))});
         if(response.status===401 || response.status===403){await response.body?.cancel();throw Error('account_login_required');}
         if(response.status===429 || response.status===503){
           const seconds=Number(response.headers.get('retry-after'));
@@ -33,6 +34,10 @@ export async function downloadRelease({pin,publicKey,accessToken,fetchImpl=fetch
       } catch(error) {
         const transient=error.message==='operator_release_busy' || ['TimeoutError','AbortError','TypeError'].includes(error.name);
         if(!transient)throw error;
+        // Some network paths stall after a small cumulative amount of TLS
+        // traffic on one connection. After a transport/body failure, use a
+        // fresh bounded connection for each remaining read in this attempt.
+        if(['TimeoutError','AbortError','TypeError'].includes(error.name))reconnecting=true;
         if(attempt===2)throw Error(error.message==='operator_release_busy'?'operator_release_busy':error.name==='TypeError'?'operator_download_network_error':'operator_download_timeout');
         await delay(Math.min(Math.max(250*(attempt+1),retryAfterMs),Math.max(0,deadline-Date.now())));
       }
