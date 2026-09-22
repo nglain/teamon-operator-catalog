@@ -46,6 +46,9 @@ export async function downloadRelease({pin,publicKey,accessToken,fetchImpl=fetch
   const total=Number(match?.[2]);
   if(!match || !Number.isSafeInteger(total) || total<1 || total>value.bytes+65536 || Number(match[1])!==Math.min(size,total)-1 || first.body.length!==Math.min(size,total))throw Error('invalid_release_range');
   const chunks=new Array(Math.ceil(total/size));chunks[0]=first.body;
+  // Master deliberately exposes two reader slots shared by all Operator
+  // tasks. One bounded worker per installation avoids a single bootstrap
+  // monopolising both slots while another task is finishing or recovering.
   let next=1,stopped=false;
   async function worker(){
     for(;!stopped;){const index=next++;if(index>=chunks.length)return;
@@ -55,7 +58,7 @@ export async function downloadRelease({pin,publicKey,accessToken,fetchImpl=fetch
       chunks[index]=part.body;
     }
   }
-  const results=await Promise.allSettled(Array.from({length:2},()=>worker().catch(error=>{stopped=true;throw error;})));
+  const results=await Promise.allSettled([worker().catch(error=>{stopped=true;throw error;})]);
   for(const result of results)if(result.status==='rejected')throw result.reason;
   let archive;
   try{archive=gunzipSync(Buffer.concat(chunks),{maxOutputLength:value.bytes});}catch{throw Error('invalid_operator_release');}

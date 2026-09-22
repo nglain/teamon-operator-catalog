@@ -12,6 +12,7 @@ import {accountPath,readAccountSession,accountJson,MASTER_ORIGIN} from '../src/a
 import {beginAccountDevice,finishAccountDevice} from '../src/account-device.mjs';
 import {createReleaseStore} from './release-store.mjs';
 import {downloadRelease} from './release-download.mjs';
+import {createInstallCoordinator} from './install-coordinator.mjs';
 
 const hash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const result=value=>({content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value});
@@ -24,6 +25,7 @@ export async function createPrivateBootstrap({release,catalog,configPath,fetchIm
   const pin=release.targets[`${process.platform}-${process.arch}`];
   if(!pin || hash(catalog)!==pin.catalogHash)throw Error('unsupported_operator_release');
   const store=createReleaseStore({root:path.join(path.dirname(configPath),'runtimes'),publicKey:createPublicKey(release.publicKey),pin});
+  const runtimeRoot=path.join(path.dirname(configPath),'runtimes');
   let runtime,loading,installing,closed=false;
   const processInstanceId=randomUUID(),processStartedAt=new Date(Date.now()-process.uptime()*1000).toISOString();
   const server=new Server({name:'teamon-operator',version:release.version},{capabilities:{tools:{}},
@@ -55,6 +57,12 @@ export async function createPrivateBootstrap({release,catalog,configPath,fetchIm
   function validateSetup(args) {
     if(Object.keys(args).some(k=>k!=='wait_seconds') || args.wait_seconds!==undefined && (!Number.isInteger(args.wait_seconds)||args.wait_seconds<0||args.wait_seconds>45))throw Error('invalid_setup_request');
   }
+  const coordinator=createInstallCoordinator({root:runtimeRoot,version:release.version,load:()=>store.load(),install:async authorized=>{
+    const bytes=await downloadRelease({pin,publicKey:createPublicKey(release.publicKey),accessToken:authorized.session.accessToken,fetchImpl});
+    const current=await readAccountSession(accountPath(configPath));
+    if(current.accessToken!==authorized.session.accessToken)throw Error('account_changed');
+    await store.install(bytes);
+  }});
   async function setup(args) {
     const until=Date.now()+(args.wait_seconds||0)*1000;
     for(;;) {
@@ -66,13 +74,13 @@ export async function createPrivateBootstrap({release,catalog,configPath,fetchIm
       if(closed)throw Error('operator_closed');
     }
     const authorized=await account();
-    if(!await load()) {
-      const bytes=await downloadRelease({pin,publicKey:createPublicKey(release.publicKey),accessToken:authorized.session.accessToken,fetchImpl});
-      const current=await readAccountSession(accountPath(configPath));
-      if(current.accessToken!==authorized.session.accessToken)throw Error('account_changed');
-      await store.install(bytes);
-      if(!await load())throw Error('runtime_activation_failed');
-    }
+    // The coordinator is shared by all bootstrap processes through the
+    // private runtime directory. Only its lock owner can download/install.
+    const outcome=await coordinator.run({waitSeconds:Math.max(0,(until-Date.now())/1000),installArgs:authorized});
+    if(outcome.state!=='installed')return result(outcome);
+    // Cache presence is not activation. Every follower must start and verify
+    // its own child before reporting successful installation.
+    if(!await load())throw Error('runtime_activation_failed');
     return result({state:'installed',version:release.version,accountLogin:true,assignedCompanies:authorized.count,next:'operator_workspace_open'});
   }
   server.setRequestHandler(ListToolsRequestSchema,async()=>({tools:[...structuredClone(catalog),structuredClone(setupTool)]}));
@@ -108,9 +116,10 @@ export async function createPrivateBootstrap({release,catalog,configPath,fetchIm
         if(Object.keys(args).some(k=>k!=='refresh_account') || args.refresh_account!==undefined && typeof args.refresh_account!=='boolean')throw Error('invalid_status_request');
         if(args.refresh_account){
           const pending=await finishAccountDevice(configPath,{fetchImpl});if(pending && pending.state!=='account_token_received')return result({version:release.version,...pending});
-          const authorized=await account();return result({version:release.version,state:'operator_runtime_required',accountLogin:true,assignedCompanies:authorized.count});
+          const authorized=await account();return result({version:release.version,state:await coordinator.status()?'operator_installing':'operator_runtime_required',accountLogin:true,assignedCompanies:authorized.count});
         }
-        return result({version:release.version,state:'operator_runtime_required',liveChecked:false});
+        const lock=await coordinator.status();
+        return result(lock?{version:release.version,state:'operator_installing',retryAfter:2,next:'operator_setup'}:{version:release.version,state:'operator_runtime_required',liveChecked:false});
       }
       if(name==='operator_runtime_info') {
         const toolNames=[...catalog.map(t=>t.name),'operator_setup'].sort();

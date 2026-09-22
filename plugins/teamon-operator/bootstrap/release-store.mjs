@@ -15,7 +15,7 @@ async function writeNew(file,bytes) {
   const h=await open(file,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL,0o600);
   try{await h.writeFile(bytes);await h.sync();}finally{await h.close();}
 }
-async function privateRoot(root) {
+export async function privateRoot(root) {
   await mkdir(root,{recursive:true,mode:0o700});
   if(!safe(await lstat(root)) || !(await lstat(root)).isDirectory() || await realpath(root)!==path.resolve(root))throw Error('unsafe_runtime_directory');
 }
