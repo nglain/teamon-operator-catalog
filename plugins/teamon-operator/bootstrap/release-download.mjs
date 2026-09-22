@@ -15,10 +15,15 @@ export async function downloadRelease({pin,publicKey,accessToken,fetchImpl=fetch
   async function get(file,limit,range) {
     for(let attempt=0;attempt<3;attempt++) {
       if(Date.now()>=deadline)throw Error('operator_download_timeout');
+      let retryAfterMs=0;
       try {
         const response=await fetchImpl(base+file,{redirect:'error',headers:{Authorization:`Bearer ${accessToken}`,Connection:'keep-alive','Accept-Encoding':'identity',...(range?{Range:range}:{})},signal:AbortSignal.timeout(Math.max(1,Math.min(10000,deadline-Date.now())))});
         if(response.status===401 || response.status===403){await response.body?.cancel();throw Error('account_login_required');}
-        if(response.status===429 || response.status===503){await response.body?.cancel();throw Error('operator_release_busy');}
+        if(response.status===429 || response.status===503){
+          const seconds=Number(response.headers.get('retry-after'));
+          if(Number.isFinite(seconds)&&seconds>0)retryAfterMs=Math.min(5000,seconds*1000);
+          await response.body?.cancel();throw Error('operator_release_busy');
+        }
         if(response.status!==(range?206:200)){await response.body?.cancel();throw Error('operator_release_unavailable');}
         if(Number(response.headers.get('content-length'))>limit){await response.body?.cancel();throw Error('operator_release_too_large');}
         let bytes=0;const parts=[];
@@ -28,7 +33,7 @@ export async function downloadRelease({pin,publicKey,accessToken,fetchImpl=fetch
         const transient=error.message==='operator_release_busy' || ['TimeoutError','AbortError','TypeError'].includes(error.name);
         if(!transient)throw error;
         if(attempt===2)throw Error(error.message==='operator_release_busy'?'operator_release_busy':error.name==='TypeError'?'operator_download_network_error':'operator_download_timeout');
-        await delay(250*(attempt+1));
+        await delay(Math.min(Math.max(250*(attempt+1),retryAfterMs),Math.max(0,deadline-Date.now())));
       }
     }
   }
@@ -50,7 +55,7 @@ export async function downloadRelease({pin,publicKey,accessToken,fetchImpl=fetch
       chunks[index]=part.body;
     }
   }
-  const results=await Promise.allSettled(Array.from({length:4},()=>worker().catch(error=>{stopped=true;throw error;})));
+  const results=await Promise.allSettled(Array.from({length:2},()=>worker().catch(error=>{stopped=true;throw error;})));
   for(const result of results)if(result.status==='rejected')throw result.reason;
   let archive;
   try{archive=gunzipSync(Buffer.concat(chunks),{maxOutputLength:value.bytes});}catch{throw Error('invalid_operator_release');}
