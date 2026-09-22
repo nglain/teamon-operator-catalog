@@ -26,7 +26,7 @@ export async function createPrivateBootstrap({release,catalog,configPath,fetchIm
   if(!pin || hash(catalog)!==pin.catalogHash)throw Error('unsupported_operator_release');
   const store=createReleaseStore({root:path.join(path.dirname(configPath),'runtimes'),publicKey:createPublicKey(release.publicKey),pin});
   const runtimeRoot=path.join(path.dirname(configPath),'runtimes');
-  let runtime,loading,installing,closed=false;
+  let runtime,loading,installing,download,closed=false;
   const processInstanceId=randomUUID(),processStartedAt=new Date(Date.now()-process.uptime()*1000).toISOString();
   const server=new Server({name:'teamon-operator',version:release.version},{capabilities:{tools:{}},
     instructions:'TeamON Operator. For installation: account_login_open, then explicit operator_setup. Diagnostics never install. After setup, installation_status refresh and operator_workspace_open. Preserve human approval for business writes; never retry an uncertain effect.'});
@@ -58,7 +58,8 @@ export async function createPrivateBootstrap({release,catalog,configPath,fetchIm
     if(Object.keys(args).some(k=>k!=='wait_seconds') || args.wait_seconds!==undefined && (!Number.isInteger(args.wait_seconds)||args.wait_seconds<0||args.wait_seconds>45))throw Error('invalid_setup_request');
   }
   const coordinator=createInstallCoordinator({root:runtimeRoot,version:release.version,load:()=>store.load(),install:async authorized=>{
-    const bytes=await downloadRelease({pin,publicKey:createPublicKey(release.publicKey),accessToken:authorized.session.accessToken,fetchImpl});
+    const bytes=await downloadRelease({pin,publicKey:createPublicKey(release.publicKey),accessToken:authorized.session.accessToken,fetchImpl,
+      checkpointRoot:runtimeRoot,onProgress:value=>{download=value;}});
     const current=await readAccountSession(accountPath(configPath));
     if(current.accessToken!==authorized.session.accessToken)throw Error('account_changed');
     await store.install(bytes);
@@ -97,9 +98,13 @@ export async function createPrivateBootstrap({release,catalog,configPath,fetchIm
           const outcome=await Promise.race([installing,new Promise(resolve=>{
             timer=setTimeout(()=>resolve(null),(args.wait_seconds ?? 45)*1000);
           })]);
-          if(!outcome)return result({state:'operator_installing',version:release.version,retryAfter:2,next:'operator_setup'});
+          if(!outcome)return result({state:'operator_installing',version:release.version,retryAfter:2,next:'operator_setup',...(download?{download}:{})});
           installing=undefined;
-          if(outcome.error)throw outcome.error;
+          if(outcome.error){
+            if(download && ['operator_download_timeout','operator_download_network_error','operator_release_busy'].includes(outcome.error.message))
+              return result({state:'operator_download_paused',version:release.version,reason:outcome.error.message,download,retryable:true,next:'operator_setup'});
+            throw outcome.error;
+          }
           return outcome.value;
         } finally {clearTimeout(timer);}
       }

@@ -1,4 +1,5 @@
-import {verifyReleaseMetadata} from './release-trust.mjs';
+import {verifyReleaseMetadata,verifyReleaseArchive} from './release-trust.mjs';
+import {openDownloadCache} from './download-cache.mjs';
 import {MASTER_ORIGIN} from '../src/account-session.mjs';
 import {gunzipSync} from 'node:zlib';
 import {setTimeout as delay} from 'node:timers/promises';
@@ -7,7 +8,7 @@ import {setTimeout as delay} from 'node:timers/promises';
 // responses tolerate paths that stall large transfers; reuse TLS connections
 // instead of paying for a new handshake for every range. Compressed
 // bytes are untrusted until decompression and signed archive verification.
-export async function downloadRelease({pin,publicKey,accessToken,fetchImpl=fetch}) {
+export async function downloadRelease({pin,publicKey,accessToken,fetchImpl=fetch,checkpointRoot,onProgress=()=>{}}) {
   if(!/^[A-Za-z0-9_-]{43}$/.test(accessToken) || !/^\d+\.\d+\.\d+$/.test(pin.expectedVersion)
     || !['darwin','linux','win32'].includes(pin.platform) || !['arm64','x64'].includes(pin.arch))throw Error('invalid_delivery_request');
   const base=`${MASTER_ORIGIN}/api/operator/distribution/${pin.expectedVersion}/${pin.platform}-${pin.arch}/`;
@@ -45,23 +46,25 @@ export async function downloadRelease({pin,publicKey,accessToken,fetchImpl=fetch
   const match=/^bytes 0-(\d+)\/(\d+)$/.exec(first.contentRange||'');
   const total=Number(match?.[2]);
   if(!match || !Number.isSafeInteger(total) || total<1 || total>value.bytes+65536 || Number(match[1])!==Math.min(size,total)-1 || first.body.length!==Math.min(size,total))throw Error('invalid_release_range');
-  const chunks=new Array(Math.ceil(total/size));chunks[0]=first.body;
-  // Master deliberately exposes two reader slots shared by all Operator
-  // tasks. One bounded worker per installation avoids a single bootstrap
-  // monopolising both slots while another task is finishing or recovering.
-  let next=1,stopped=false;
-  async function worker(){
-    for(;!stopped;){const index=next++;if(index>=chunks.length)return;
-      const start=index*size,end=Math.min(start+size,total)-1;
+  const cache=checkpointRoot?await openDownloadCache(checkpointRoot,pin.sha256,total):null;
+  try {
+    const chunks=cache?.chunks||[];
+    let offset=cache?.offset||0;
+    if(!offset){cache?.append(0,first.body);chunks.push(first.body);offset=first.body.length;}
+    onProgress({downloadedBytes:offset,totalBytes:total});
+    // One bounded worker leaves the second Master reader for other tasks.
+    while(offset<total) {
+      const start=offset,end=Math.min(start+size,total)-1;
       const part=await get('runtime.json.gz',end-start+1,`bytes=${start}-${end}`);
       if(part.contentRange!==`bytes ${start}-${end}/${total}` || part.body.length!==end-start+1)throw Error('invalid_release_range');
-      chunks[index]=part.body;
+      cache?.append(start,part.body);chunks.push(part.body);offset+=part.body.length;
+      onProgress({downloadedBytes:offset,totalBytes:total});
     }
-  }
-  const results=await Promise.allSettled([worker().catch(error=>{stopped=true;throw error;})]);
-  for(const result of results)if(result.status==='rejected')throw result.reason;
-  let archive;
-  try{archive=gunzipSync(Buffer.concat(chunks),{maxOutputLength:value.bytes});}catch{throw Error('invalid_operator_release');}
-  if(archive.length!==value.bytes)throw Error('invalid_operator_release');
-  return {metadata,signature,archive}; // Store verifies SHA/signature before execution.
+    let archive;
+    try{
+      archive=gunzipSync(Buffer.concat(chunks),{maxOutputLength:value.bytes});
+      verifyReleaseArchive(archive,value);
+    }catch{cache?.clear();throw Error('invalid_operator_release');}
+    return {metadata,signature,archive}; // Store verifies again before execution.
+  }finally{cache?.close();}
 }
