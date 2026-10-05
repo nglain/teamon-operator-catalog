@@ -51,7 +51,8 @@ export async function accountJson(url, options={}, fetchImpl=fetch) {
     await response.body?.cancel();
     await delay(250,undefined,{signal});
   }
-  if(!response.ok) throw new Error(response.status===401?'account_login_required':'account_service_unavailable');
+  if(!response.ok) throw new Error(response.status===401?'account_login_required':response.status===403?'account_access_denied':
+    response.status===429 || response.status>=500?'account_service_unavailable':'invalid_account_response');
   let bytes=0; const chunks=[];
   for await(const chunk of response.body || []) {bytes+=chunk.length;if(bytes>256*1024)throw new Error('account_response_too_large');chunks.push(chunk);}
   try{return JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{throw new Error('invalid_account_response');}

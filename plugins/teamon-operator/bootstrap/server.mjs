@@ -13,6 +13,8 @@ import {beginAccountDevice,finishAccountDevice} from '../src/account-device.mjs'
 import {createReleaseStore} from './release-store.mjs';
 import {downloadRelease} from './release-download.mjs';
 import {createInstallCoordinator} from './install-coordinator.mjs';
+import {runtimeConnection} from './runtime-connection.mjs';
+import {ACCOUNT_ERROR_CODES} from '../src/account-errors.mjs';
 
 const hash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const result=value=>({content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value});
@@ -26,25 +28,22 @@ export async function createPrivateBootstrap({release,catalog,configPath,fetchIm
   if(!pin || hash(catalog)!==pin.catalogHash)throw Error('unsupported_operator_release');
   const store=createReleaseStore({root:path.join(path.dirname(configPath),'runtimes'),publicKey:createPublicKey(release.publicKey),pin});
   const runtimeRoot=path.join(path.dirname(configPath),'runtimes');
-  let runtime,loading,installing,download,closed=false;
+  let installing,download,closed=false;
   const processInstanceId=randomUUID(),processStartedAt=new Date(Date.now()-process.uptime()*1000).toISOString();
   const server=new Server({name:'teamon-operator',version:release.version},{capabilities:{tools:{}},
     instructions:'TeamON Operator. For installation: account_login_open, then explicit operator_setup. Diagnostics never install. After setup, installation_status refresh and operator_workspace_open. Preserve human approval for business writes; never retry an uncertain effect.'});
-  async function load() {
-    if(closed)throw Error('operator_closed');
-    if(runtime)return runtime;
-    loading ||= (async()=>{
+  const connection=runtimeConnection(async onclose=>{
       const installed=await store.load();if(!installed)return null;
       const client=new Client({name:'teamon-public-bootstrap',version:release.version});
+      client.onclose=onclose;
       try {
         await client.connect(new StdioClientTransport({command:process.execPath,args:[path.join(installed.directory,'src/cli.mjs'),'serve','--config',configPath],stderr:'ignore'}));
         const tools=(await client.listTools()).tools;
         if(hash(tools)!==pin.catalogHash || closed)throw Error('runtime_catalog_mismatch');
-        runtime=client;return client;
+        return client;
       }catch(error){await client.close();throw error;}
-    })().finally(()=>{loading=undefined;});
-    return loading;
-  }
+  });
+  const load=()=>connection.load();
   async function account() {
     let session;
     try {session=await readAccountSession(accountPath(configPath));}
@@ -135,11 +134,11 @@ export async function createPrivateBootstrap({release,catalog,configPath,fetchIm
       return fail('operator_runtime_required: complete explicit operator_setup first');
     }catch(error){
       const allowed=['account_login_required','account_changed','account_service_unavailable','operator_release_unavailable','operator_release_busy','operator_download_timeout','operator_download_network_error','operator_release_too_large','invalid_release_range','operator_closed','operator_runtime_required','runtime_catalog_mismatch','invalid_operator_release','release_pin_mismatch','runtime_integrity_failed','unsafe_runtime_file','unsafe_runtime_directory','unexpected_runtime_file','invalid_setup_request','invalid_status_request','invalid_login_request'];
-      return fail(allowed.includes(error.message)?error.message:runtimeFailureCode(error));
+      return fail([...allowed,...ACCOUNT_ERROR_CODES,'runtime_activation_failed'].includes(error.message)?error.message:runtimeFailureCode(error));
     }
   });
   const close=server.close.bind(server);
-  server.close=async()=>{closed=true;await installing?.catch(()=>{});await loading?.catch(()=>{});await runtime?.close();await close();};
+  server.close=async()=>{closed=true;await installing?.catch(()=>{});await connection.close();await close();};
   return server;
 }
 
